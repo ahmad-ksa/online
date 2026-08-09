@@ -31,7 +31,7 @@ public class GameUIManager : MonoBehaviour
     [SerializeField] private Text onlineFriendsCountText;
 
     [SerializeField] private Transform notificationsArea;
-    [SerializeField] private Prefab notificationPrefab;
+    [SerializeField] private GameObject notificationPrefab;
 
     private PlayerManager playerManager;
     private ChatManager chatManager;
