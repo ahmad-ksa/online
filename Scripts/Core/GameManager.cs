@@ -1,48 +1,36 @@
 using UnityEngine;
-using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 /// <summary>
-/// مدير اللعبة الرئيسي - نقطة الدخول للنظام
-/// يتحكم في حالة اللعبة والتنقل بين الـ Scenes
+/// مدير اللعبة الرئيسي - متعدد لاعبين أونلاين فقط
 /// </summary>
 public class GameManager : MonoBehaviour
 {
-    [SerializeField] private static GameManager instance;
-    
-    // الحالات الممكنة للعبة
-    public enum GameState
-    {
-        Initializing,
-        MainMenu,
-        Login,
-        Home,
-        Lobby,
-        InGame,
-        Results,
-        Settings,
-        Paused
-    }
+    private static GameManager instance;
 
-    private GameState currentState = GameState.Initializing;
-    private GameState previousState = GameState.MainMenu;
+    [SerializeField] private Transform playerSpawnPoint;
+    [SerializeField] private GameObject playerPrefab;
+    [SerializeField] private int maxPlayers = 100;
+
+    private NetworkManager networkManager;
+    private PlayerManager playerManager;
+    private FriendsManager friendsManager;
+    private ChatManager chatManager;
+    private VoiceChatManager voiceChatManager;
+
+    private Dictionary<string, GameObject> activePlayers = new Dictionary<string, GameObject>();
+    private bool isGameStarted = false;
+    private bool isOnline = false;
 
     // Events
-    public static event Action<GameState> OnGameStateChanged;
-    public static event Action<GameState, GameState> OnGameStateTransition;
-    public static event Action OnGameInitialized;
-
-    // Platform
-    private RuntimePlatform currentPlatform;
-    private bool isMobile = false;
-
-    // Configuration
-    [SerializeField] private GameConfiguration gameConfig;
-    private bool isInitialized = false;
+    public event System.Action OnGameStarted;
+    public event System.Action<string> OnPlayerJoined;
+    public event System.Action<string> OnPlayerLeft;
+    public event System.Action OnConnectionLost;
 
     private void Awake()
     {
-        // Singleton Pattern
         if (instance != null && instance != this)
         {
             Destroy(gameObject);
@@ -52,220 +40,204 @@ public class GameManager : MonoBehaviour
         instance = this;
         DontDestroyOnLoad(gameObject);
 
-        // تحديد المنصة
-        DetectPlatform();
+        Logger.Log("GameManager initialized", "GameManager");
     }
 
-    private void Start()
+    private async void Start()
     {
-        InitializeGame();
-    }
+        networkManager = NetworkManager.Instance;
+        playerManager = PlayerManager.Instance;
+        friendsManager = FriendsManager.Instance;
+        chatManager = ChatManager.Instance;
+        voiceChatManager = VoiceChatManager.Instance;
 
-    /// <summary>
-    /// تحديد نوع المنصة (Mobile/PC/Steam)
-    /// </summary>
-    private void DetectPlatform()
-    {
-        currentPlatform = Application.platform;
-
-        isMobile = (currentPlatform == RuntimePlatform.Android || 
-                    currentPlatform == RuntimePlatform.IPhonePlayer);
-
-        Debug.Log($"Platform Detected: {currentPlatform} (Mobile: {isMobile})");
+        // الاتصال الإلزامي بالسيرفر
+        await InitializeOnlineGame();
     }
 
     /// <summary>
-    /// تهيئة اللعبة
+    /// تهيئة اللعبة الأونلاين (إلزامي)
     /// </summary>
-    private void InitializeGame()
+    private async Task<bool> InitializeOnlineGame()
     {
-        if (isInitialized)
-            return;
-
-        Debug.Log("=== Game Initialization Started ===");
-
         try
         {
-            // تحميل الإعدادات
-            LoadGameConfiguration();
+            Logger.Log("Initializing online game...", "GameManager");
 
-            // تهيئة Managers
-            InitializeManagers();
+            // 1. الاتصال بالسيرفر
+            bool connected = await networkManager.ConnectToServer();
+            if (!connected)
+            {
+                Logger.LogError("Failed to connect to server! Game cannot start.", "GameManager");
+                ShowConnectionErrorUI("فشل الاتصال بالسيرفر");
+                return false;
+            }
 
-            // تعيين الحالة الأولية
-            SetGameState(GameState.MainMenu);
+            Logger.Log("✓ Connected to server", "GameManager");
 
-            isInitialized = true;
-            OnGameInitialized?.Invoke();
+            // 2. مصادقة اللاعب
+            var playerProfile = playerManager.CurrentProfile;
+            if (playerProfile == null)
+            {
+                Logger.LogError("Player profile not loaded!", "GameManager");
+                return false;
+            }
 
-            Debug.Log("=== Game Initialization Completed ===");
+            bool authenticated = await networkManager.AuthenticatePlayer(
+                playerProfile.email,
+                "password" // في الحقيقة يجب تخزين كلمة المرور بأمان
+            );
+
+            if (!authenticated)
+            {
+                Logger.LogError("Authentication failed!", "GameManager");
+                ShowConnectionErrorUI("فشلت المصادقة");
+                return false;
+            }
+
+            Logger.Log("✓ Player authenticated", "GameManager");
+
+            // 3. تحميل بيانات اللاعب
+            await playerManager.LoadPlayerData();
+            Logger.Log("✓ Player data loaded", "GameManager");
+
+            // 4. تحميل الأصدقاء
+            await friendsManager.LoadFriends();
+            Logger.Log("✓ Friends list loaded", "GameManager");
+
+            // 5. بدء اللعبة
+            isOnline = true;
+            isGameStarted = true;
+            OnGameStarted?.Invoke();
+
+            // 6. إنشاء اللاعب الحالي
+            SpawnLocalPlayer();
+
+            Logger.Log("✅ Online game started successfully!", "GameManager");
+            return true;
         }
-        catch (Exception ex)
+        catch (System.Exception ex)
         {
-            Debug.LogError($"Failed to initialize game: {ex.Message}");
+            Logger.LogCritical("Failed to initialize online game", ex, "GameManager");
+            ShowConnectionErrorUI("خطأ في تهيئة اللعبة");
+            return false;
         }
     }
 
     /// <summary>
-    /// تحميل إعدادات اللعبة
+    /// إنشاء اللاعب الحالي في الماب
     /// </summary>
-    private void LoadGameConfiguration()
+    private void SpawnLocalPlayer()
     {
-        if (gameConfig == null)
+        try
         {
-            gameConfig = Resources.Load<GameConfiguration>("GameConfig");
-            
-            if (gameConfig == null)
+            if (playerPrefab == null)
             {
-                Debug.LogWarning("GameConfiguration not found! Creating default...");
-                gameConfig = ScriptableObject.CreateInstance<GameConfiguration>();
+                Logger.LogError("Player prefab not assigned!", "GameManager");
+                return;
+            }
+
+            Vector3 spawnPos = playerSpawnPoint != null 
+                ? playerSpawnPoint.position 
+                : Vector3.zero;
+
+            GameObject playerObj = Instantiate(playerPrefab, spawnPos, Quaternion.identity);
+            playerObj.name = "LocalPlayer";
+            playerObj.tag = "LocalPlayer";
+
+            var controller = playerObj.GetComponent<PlayerController>();
+            var networkSync = playerObj.GetComponent<PlayerNetworkSync>();
+
+            if (controller != null && networkSync != null)
+            {
+                var profile = playerManager.CurrentProfile;
+                controller.SetPlayerData(profile.playerId, profile.username);
+                networkSync.SetRemotePlayerData(profile.playerId, profile.username);
+
+                activePlayers[profile.playerId] = playerObj;
+                OnPlayerJoined?.Invoke(profile.playerId);
+
+                Logger.Log($"Local player spawned: {profile.username}", "GameManager");
             }
         }
-
-        Debug.Log($"Game Config Loaded: {gameConfig.GameTitle} v{gameConfig.GameVersion}");
-    }
-
-    /// <summary>
-    /// تهيئة جميع الـ Managers
-    /// </summary>
-    private void InitializeManagers()
-    {
-        // سيتم تفعيل الـ Managers من خلال Singleton Pattern
-        NetworkManager.Initialize();
-        PlayerManager.Initialize();
-        ConfigurationManager.Initialize(gameConfig);
-
-        Debug.Log("All Managers Initialized");
-    }
-
-    /// <summary>
-    /// تغيير حالة اللعبة
-    /// </summary>
-    public void SetGameState(GameState newState)
-    {
-        if (newState == currentState)
-            return;
-
-        previousState = currentState;
-        currentState = newState;
-
-        Debug.Log($"Game State Changed: {previousState} -> {currentState}");
-
-        OnGameStateChanged?.Invoke(currentState);
-        OnGameStateTransition?.Invoke(previousState, currentState);
-
-        HandleStateTransition(previousState, currentState);
-    }
-
-    /// <summary>
-    /// معالجة انتقال الحالات
-    /// </summary>
-    private void HandleStateTransition(GameState from, GameState to)
-    {
-        switch (to)
+        catch (System.Exception ex)
         {
-            case GameState.MainMenu:
-                LoadScene("MainMenu");
-                break;
-
-            case GameState.Login:
-                LoadScene("Login");
-                break;
-
-            case GameState.Home:
-                LoadScene("Home");
-                break;
-
-            case GameState.Lobby:
-                // سيتم التحكم به من Matchmaking System
-                break;
-
-            case GameState.InGame:
-                // سيتم التحكم به من Game System
-                break;
-
-            case GameState.Paused:
-                Time.timeScale = 0f;
-                break;
-
-            case GameState.Results:
-                // سيتم التحكم به من Results System
-                break;
+            Logger.LogError($"Failed to spawn player: {ex.Message}", "GameManager");
         }
     }
 
     /// <summary>
-    /// تحميل Scene
+    /// استقبال لاعب جديد من السيرفر
     /// </summary>
-    public void LoadScene(string sceneName)
+    public void SpawnRemotePlayer(string playerId, string playerName, Vector3 position)
     {
-        Debug.Log($"Loading Scene: {sceneName}");
-        UnityEngine.SceneManagement.SceneManager.LoadScene(sceneName);
+        try
+        {
+            if (activePlayers.ContainsKey(playerId))
+                return; // اللاعب موجود بالفعل
+
+            if (playerPrefab == null)
+            {
+                Logger.LogError("Player prefab not assigned!", "GameManager");
+                return;
+            }
+
+            GameObject playerObj = Instantiate(playerPrefab, position, Quaternion.identity);
+            playerObj.name = $"RemotePlayer_{playerName}";
+            playerObj.tag = "RemotePlayer";
+
+            var networkSync = playerObj.GetComponent<PlayerNetworkSync>();
+            if (networkSync != null)
+            {
+                networkSync.SetRemotePlayerData(playerId, playerName);
+                activePlayers[playerId] = playerObj;
+                OnPlayerJoined?.Invoke(playerId);
+
+                Logger.Log($"Remote player spawned: {playerName}", "GameManager");
+            }
+        }
+        catch (System.Exception ex)
+        {
+            Logger.LogError($"Failed to spawn remote player: {ex.Message}", "GameManager");
+        }
     }
 
     /// <summary>
-    /// تحميل Scene بشكل Async
+    /// إزالة لاعب من اللعبة
     /// </summary>
-    public void LoadSceneAsync(string sceneName, System.Action onComplete = null)
+    public void RemovePlayer(string playerId)
     {
-        StartCoroutine(LoadSceneAsyncRoutine(sceneName, onComplete));
-    }
-
-    private System.Collections.IEnumerator LoadSceneAsyncRoutine(string sceneName, System.Action onComplete)
-    {
-        var asyncLoad = UnityEngine.SceneManagement.SceneManager.LoadSceneAsync(sceneName);
-        
-        while (!asyncLoad.isDone)
+        if (activePlayers.ContainsKey(playerId))
         {
-            yield return null;
-        }
+            Destroy(activePlayers[playerId]);
+            activePlayers.Remove(playerId);
+            OnPlayerLeft?.Invoke(playerId);
 
-        onComplete?.Invoke();
+            Logger.Log($"Player removed: {playerId}", "GameManager");
+        }
     }
+
+    /// <summary>
+    /// عرض رسالة خطأ الاتصال
+    /// </summary>
+    private void ShowConnectionErrorUI(string message)
+    {
+        // TODO: عرض UI قائمة على الخطأ
+        Logger.LogError(message, "GameManager");
+    }
+
+    /// <summary>
+    /// التحقق من الاتصال بالسيرفر
+    /// </summary>
+    public bool IsOnline => isOnline && networkManager.IsConnected;
+
+    /// <summary>
+    /// التحقق من بدء اللعبة
+    /// </summary>
+    public bool IsGameStarted => isGameStarted && IsOnline;
 
     // Getters
     public static GameManager Instance => instance;
-    public GameState CurrentState => currentState;
-    public GameState PreviousState => previousState;
-    public bool IsMobile => isMobile;
-    public RuntimePlatform Platform => currentPlatform;
-    public GameConfiguration Config => gameConfig;
-    public bool IsInitialized => isInitialized;
-
-    /// <summary>
-    /// إيقاف اللعبة
-    /// </summary>
-    public void PauseGame()
-    {
-        if (currentState != GameState.InGame)
-            return;
-
-        SetGameState(GameState.Paused);
-        Time.timeScale = 0f;
-    }
-
-    /// <summary>
-    /// استئناف اللعبة
-    /// </summary>
-    public void ResumeGame()
-    {
-        if (currentState != GameState.Paused)
-            return;
-
-        SetGameState(GameState.InGame);
-        Time.timeScale = 1f;
-    }
-
-    /// <summary>
-    /// الخروج من اللعبة
-    /// </summary>
-    public void QuitGame()
-    {
-        Debug.Log("Quitting Game...");
-        #if UNITY_EDITOR
-            UnityEditor.EditorApplication.isPlaying = false;
-        #else
-            Application.Quit();
-        #endif
-    }
+    public Dictionary<string, GameObject> ActivePlayers => activePlayers;
+    public int PlayerCount => activePlayers.Count;
 }
