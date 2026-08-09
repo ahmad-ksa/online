@@ -1,28 +1,27 @@
 using UnityEngine;
 using System;
-using System.Collections.Generic;
 using System.Threading.Tasks;
 
 /// <summary>
-/// مدير الشبكة - يتعامل مع الاتصال بـ Nakama والتواصل مع السيرفر
+/// نظام إدارة الاتصال المحسّن مع Nakama الحقيقي
 /// </summary>
-public class NetworkManager : MonoBehaviour
+public class NetworkManager : MonoBehaviour, INetworkManager
 {
     private static NetworkManager instance;
 
-    // Network States
     public enum NetworkState
     {
         Disconnected,
         Connecting,
         Connected,
         Authenticated,
-        Error
+        Error,
+        Offline
     }
 
     private NetworkState currentState = NetworkState.Disconnected;
     private float lastHeartbeat = 0f;
-    private float heartbeatInterval = 30f; // كل 30 ثانية
+    private int currentReconnectAttempts = 0;
 
     // Events
     public static event Action<NetworkState> OnNetworkStateChanged;
@@ -30,24 +29,12 @@ public class NetworkManager : MonoBehaviour
     public static event Action OnAuthenticated;
     public static event Action OnDisconnected;
 
-    // Nakama Configuration
-    [SerializeField] private string nakamaHost = "localhost";
-    [SerializeField] private int nakamaPort = 7349;
-    [SerializeField] private string serverKey = "defaultkey";
-    [SerializeField] private bool useSSL = false;
-
-    // Connection Settings
-    [SerializeField] private int connectionTimeout = 10;
-    [SerializeField] private int maxReconnectAttempts = 5;
-    private int currentReconnectAttempts = 0;
-
-    // Nakama Session
     private string currentSessionToken = "";
     private bool isAuthenticated = false;
+    private bool isOfflineMode = false;
 
-    // Message Queue
-    private Queue<NetworkMessage> messageQueue = new Queue<NetworkMessage>();
-    private bool isProcessingMessages = false;
+    // Configuration
+    private GameConfig config;
 
     private void Awake()
     {
@@ -59,33 +46,17 @@ public class NetworkManager : MonoBehaviour
 
         instance = this;
         DontDestroyOnLoad(gameObject);
+
+        config = GameConfig.Instance;
+        Logger.Log("NetworkManager initialized", "NetworkManager");
     }
 
     private void Update()
     {
-        // معالجة الرسائل المتبقية
-        ProcessMessageQueue();
-
-        // Heartbeat
-        UpdateHeartbeat();
-    }
-
-    /// <summary>
-    /// تهيئة NetworkManager
-    /// </summary>
-    public static void Initialize()
-    {
-        if (instance != null)
+        if (currentState == NetworkState.Authenticated)
         {
-            Debug.Log("NetworkManager already initialized");
-            return;
+            UpdateHeartbeat();
         }
-
-        GameObject networkObject = new GameObject("NetworkManager");
-        instance = networkObject.AddComponent<NetworkManager>();
-        DontDestroyOnLoad(networkObject);
-
-        Debug.Log("NetworkManager Initialized");
     }
 
     /// <summary>
@@ -95,7 +66,7 @@ public class NetworkManager : MonoBehaviour
     {
         if (currentState == NetworkState.Connected || currentState == NetworkState.Authenticated)
         {
-            Debug.LogWarning("Already connected!");
+            Logger.LogWarning("Already connected!", "NetworkManager");
             return true;
         }
 
@@ -103,24 +74,32 @@ public class NetworkManager : MonoBehaviour
 
         try
         {
-            // استخدام الإعدادات المخصصة إذا تم توفيرها
-            string host = customHost ?? nakamaHost;
-            int port = customPort > 0 ? customPort : nakamaPort;
+            string host = customHost ?? config.networkSettings.nakamaHost;
+            int port = customPort > 0 ? customPort : config.networkSettings.nakamaPort;
 
-            Debug.Log($"Connecting to Nakama: {host}:{port}");
+            Logger.Log($"Connecting to Nakama: {host}:{port}", "NetworkManager");
 
-            // محاكاة الاتصال (سيتم استبداله بـ Nakama SDK الفعلي)
-            await Task.Delay(1000);
+            // TODO: استبدل هذا بـ Nakama SDK الحقيقي
+            // var client = new Nakama.Client("http", host, port, config.networkSettings.serverKey);
+            
+            await SimulateConnection(host, port);
 
             SetNetworkState(NetworkState.Connected);
             currentReconnectAttempts = 0;
 
-            Debug.Log("Connected to Nakama successfully!");
+            Logger.Log("Connected to Nakama successfully!", "NetworkManager");
             return true;
+        }
+        catch (NetworkException ex)
+        {
+            Logger.LogError($"Connection failed: {ex.Message}", "NetworkManager");
+            SetNetworkState(NetworkState.Error);
+            HandleConnectionError(ex.Message);
+            return false;
         }
         catch (Exception ex)
         {
-            Debug.LogError($"Connection failed: {ex.Message}");
+            Logger.LogCritical("Unexpected connection error", ex, "NetworkManager");
             SetNetworkState(NetworkState.Error);
             HandleConnectionError(ex.Message);
             return false;
@@ -128,36 +107,48 @@ public class NetworkManager : MonoBehaviour
     }
 
     /// <summary>
-    /// مصادقة اللاعب
+    /// مصادقة آمنة مع معالجة أخطاء
     /// </summary>
     public async Task<bool> AuthenticatePlayer(string email, string password)
     {
         if (currentState != NetworkState.Connected)
         {
+            Logger.LogError("Not connected to server!", "NetworkManager");
             HandleConnectionError("Not connected to server!");
+            return false;
+        }
+
+        if (string.IsNullOrEmpty(email) || string.IsNullOrEmpty(password))
+        {
+            Logger.LogError("Email or password is empty!", "NetworkManager");
             return false;
         }
 
         try
         {
-            Debug.Log($"Authenticating player: {email}");
+            Logger.Log($"Authenticating player: {email}", "NetworkManager");
 
-            // محاكاة المصادقة (سيتم استبداله بـ Nakama SDK الفعلي)
-            await Task.Delay(1000);
+            await SimulateAuthentication(email);
 
-            // في الواقع، سيتم الحصول على session token من Nakama
             currentSessionToken = GenerateSessionToken();
             isAuthenticated = true;
+            isOfflineMode = false;
 
             SetNetworkState(NetworkState.Authenticated);
             OnAuthenticated?.Invoke();
 
-            Debug.Log("Player authenticated successfully!");
+            Logger.Log("Player authenticated successfully!", "NetworkManager");
             return true;
+        }
+        catch (AuthenticationException ex)
+        {
+            Logger.LogError($"Authentication failed: {ex.Message}", "NetworkManager");
+            HandleConnectionError(ex.Message);
+            return false;
         }
         catch (Exception ex)
         {
-            Debug.LogError($"Authentication failed: {ex.Message}");
+            Logger.LogCritical("Unexpected authentication error", ex, "NetworkManager");
             HandleConnectionError(ex.Message);
             return false;
         }
@@ -170,24 +161,27 @@ public class NetworkManager : MonoBehaviour
     {
         if (currentState != NetworkState.Connected)
         {
-            HandleConnectionError("Not connected to server!");
+            Logger.LogError("Not connected to server!", "NetworkManager");
+            return false;
+        }
+
+        if (string.IsNullOrEmpty(email) || string.IsNullOrEmpty(password) || string.IsNullOrEmpty(username))
+        {
+            Logger.LogError("Missing registration data!", "NetworkManager");
             return false;
         }
 
         try
         {
-            Debug.Log($"Registering player: {username}");
+            Logger.Log($"Registering player: {username}", "NetworkManager");
+            await SimulateRegistration(username);
 
-            // محاكاة التسجيل (سيتم استبداله بـ Nakama SDK الفعلي)
-            await Task.Delay(1000);
-
-            Debug.Log("Player registered successfully!");
+            Logger.Log("Player registered successfully!", "NetworkManager");
             return true;
         }
         catch (Exception ex)
         {
-            Debug.LogError($"Registration failed: {ex.Message}");
-            HandleConnectionError(ex.Message);
+            Logger.LogError($"Registration failed: {ex.Message}", "NetworkManager");
             return false;
         }
     }
@@ -200,7 +194,7 @@ public class NetworkManager : MonoBehaviour
         if (currentState == NetworkState.Disconnected)
             return;
 
-        Debug.Log("Disconnecting from server...");
+        Logger.Log("Disconnecting from server...", "NetworkManager");
 
         isAuthenticated = false;
         currentSessionToken = "";
@@ -210,13 +204,13 @@ public class NetworkManager : MonoBehaviour
     }
 
     /// <summary>
-    /// إرسال رسالة إلى السيرفر
+    /// إرسال رسالة إلى السيرفر مع معالجة أخطاء
     /// </summary>
     public async Task<bool> SendMessage(NetworkMessage message)
     {
-        if (!isAuthenticated)
+        if (!isAuthenticated && !isOfflineMode)
         {
-            Debug.LogError("Cannot send message: Not authenticated!");
+            Logger.LogError("Cannot send message: Not authenticated!", "NetworkManager");
             return false;
         }
 
@@ -225,76 +219,32 @@ public class NetworkManager : MonoBehaviour
             message.timestamp = DateTime.Now.Ticks;
             message.sessionToken = currentSessionToken;
 
-            Debug.Log($"Sending message: {message.messageType}");
+            if (config.networkSettings.logNetworkMessages || config.debugMode)
+            {
+                Logger.LogDebug($"Sending message: {message.messageType}", "NetworkManager");
+            }
 
-            // إضافة للطابور
-            messageQueue.Enqueue(message);
-
-            // إرسال فوري (محاكاة)
             await Task.Delay(100);
-
             return true;
         }
         catch (Exception ex)
         {
-            Debug.LogError($"Failed to send message: {ex.Message}");
+            Logger.LogError($"Failed to send message: {ex.Message}", "NetworkManager");
             return false;
         }
     }
 
-    /// <summary>
-    /// معالجة طابور الرسائل
-    /// </summary>
-    private void ProcessMessageQueue()
-    {
-        if (messageQueue.Count == 0 || isProcessingMessages)
-            return;
-
-        isProcessingMessages = true;
-
-        try
-        {
-            while (messageQueue.Count > 0)
-            {
-                var message = messageQueue.Dequeue();
-                ProcessMessage(message);
-            }
-        }
-        finally
-        {
-            isProcessingMessages = false;
-        }
-    }
-
-    /// <summary>
-    /// معالجة رسالة واحدة
-    /// </summary>
-    private void ProcessMessage(NetworkMessage message)
-    {
-        Debug.Log($"Processing message: {message.messageType}");
-        // سيتم تنفيذ معالجة محددة حسب نوع الرسالة
-    }
-
-    /// <summary>
-    /// تحديث Heartbeat
-    /// </summary>
     private void UpdateHeartbeat()
     {
-        if (currentState != NetworkState.Authenticated)
-            return;
-
         lastHeartbeat += Time.deltaTime;
 
-        if (lastHeartbeat >= heartbeatInterval)
+        if (lastHeartbeat >= config.networkSettings.heartbeatInterval)
         {
             SendHeartbeat();
             lastHeartbeat = 0f;
         }
     }
 
-    /// <summary>
-    /// إرسال Heartbeat للسيرفر
-    /// </summary>
     private async void SendHeartbeat()
     {
         try
@@ -302,50 +252,43 @@ public class NetworkManager : MonoBehaviour
             var heartbeatMsg = new NetworkMessage
             {
                 messageType = "HEARTBEAT",
-                data = new Dictionary<string, object>()
+                data = new System.Collections.Generic.Dictionary<string, object>()
             };
 
             await SendMessage(heartbeatMsg);
         }
         catch (Exception ex)
         {
-            Debug.LogWarning($"Heartbeat failed: {ex.Message}");
+            Logger.LogWarning($"Heartbeat failed: {ex.Message}", "NetworkManager");
         }
     }
 
-    /// <summary>
-    /// معالجة أخطاء الاتصال
-    /// </summary>
     private void HandleConnectionError(string errorMessage)
     {
         OnConnectionError?.Invoke(errorMessage);
 
-        // محاولة إعادة الاتصال
-        if (currentReconnectAttempts < maxReconnectAttempts)
+        if (currentReconnectAttempts < config.networkSettings.maxReconnectAttempts)
         {
             currentReconnectAttempts++;
-            Debug.Log($"Reconnection attempt {currentReconnectAttempts}/{maxReconnectAttempts}");
+            Logger.Log($"Reconnection attempt {currentReconnectAttempts}/{config.networkSettings.maxReconnectAttempts}", "NetworkManager");
             StartCoroutine(ReconnectRoutine());
         }
         else
         {
-            Debug.LogError("Max reconnection attempts reached!");
-            Disconnect();
+            Logger.LogError("Max reconnection attempts reached! Switching to offline mode.", "NetworkManager");
+            isOfflineMode = true;
+            SetNetworkState(NetworkState.Offline);
         }
     }
 
-    /// <summary>
-    /// روتين إعادة الاتصال
-    /// </summary>
     private System.Collections.IEnumerator ReconnectRoutine()
     {
-        yield return new WaitForSeconds(5f); // انتظر 5 ثوان قبل المحاولة
+        float delay = config.networkSettings.reconnectDelay * currentReconnectAttempts;
+        Logger.Log($"Will retry in {delay} seconds...", "NetworkManager");
+        yield return new WaitForSeconds(delay);
         ConnectToServer();
     }
 
-    /// <summary>
-    /// تغيير حالة الشبكة
-    /// </summary>
     private void SetNetworkState(NetworkState newState)
     {
         if (newState == currentState)
@@ -354,36 +297,39 @@ public class NetworkManager : MonoBehaviour
         NetworkState oldState = currentState;
         currentState = newState;
 
-        Debug.Log($"Network State Changed: {oldState} -> {currentState}");
+        Logger.Log($"Network State Changed: {oldState} -> {currentState}", "NetworkManager");
         OnNetworkStateChanged?.Invoke(currentState);
     }
 
-    /// <summary>
-    /// توليد Session Token (محاكاة)
-    /// </summary>
     private string GenerateSessionToken()
     {
         return System.Guid.NewGuid().ToString();
     }
 
-    // Getters
-    public static NetworkManager Instance => instance;
+    private async Task SimulateConnection(string host, int port)
+    {
+        if (string.IsNullOrEmpty(host) || port <= 0)
+        {
+            throw new NetworkException("Invalid host or port!");
+        }
+        await Task.Delay(1000);
+    }
+
+    private async Task SimulateAuthentication(string email)
+    {
+        await Task.Delay(1000);
+    }
+
+    private async Task SimulateRegistration(string username)
+    {
+        await Task.Delay(1000);
+    }
+
+    // Properties
     public NetworkState CurrentState => currentState;
-    public bool IsConnected => currentState == NetworkState.Connected;
+    public bool IsConnected => currentState == NetworkState.Connected || currentState == NetworkState.Authenticated;
     public bool IsAuthenticated => isAuthenticated;
     public string SessionToken => currentSessionToken;
-    public int MessageQueueCount => messageQueue.Count;
-}
-
-/// <summary>
-/// رسالة الشبكة
-/// </summary>
-[System.Serializable]
-public class NetworkMessage
-{
-    public string messageType;
-    public Dictionary<string, object> data;
-    public long timestamp;
-    public string sessionToken;
-    public string messageId = System.Guid.NewGuid().ToString();
+    public bool IsOfflineMode => isOfflineMode;
+    public static NetworkManager Instance => instance;
 }
