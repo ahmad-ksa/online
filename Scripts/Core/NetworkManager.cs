@@ -5,7 +5,7 @@ using System.Threading.Tasks;
 /// <summary>
 /// نظام إدارة الاتصال المحسّن مع Nakama الحقيقي
 /// </summary>
-public class NetworkManager : MonoBehaviour, INetworkManager
+public class NetworkManager : MonoBehaviour
 {
     private static NetworkManager instance;
 
@@ -217,7 +217,6 @@ public class NetworkManager : MonoBehaviour, INetworkManager
         try
         {
             message.timestamp = DateTime.Now.Ticks;
-            message.sessionToken = currentSessionToken;
 
             if (config.networkSettings.logNetworkMessages || config.debugMode)
             {
