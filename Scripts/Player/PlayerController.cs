@@ -19,16 +19,16 @@ public class PlayerController : MonoBehaviour
     private string playerId = "";
     private string playerName = "";
 
-    // الإدخال
+    // الإدخال - بدون FixedJoystick (لم يتم العثور عليه)
     private bool isUsingJoystick = false;
-    private FixedJoystick joystick;
+    private Transform joystickTransform;
 
-    private NetworkManager networkManager;
+    private NakamaClient nakamaClient;
     private PlayerNetworkSync networkSync;
 
     private void Start()
     {
-        networkManager = NetworkManager.Instance;
+        nakamaClient = NakamaClient.Instance;
         networkSync = GetComponent<PlayerNetworkSync>();
 
         // تحديد لاعب محلي أو بعيد
@@ -49,9 +49,11 @@ public class PlayerController : MonoBehaviour
 
     private void SetupLocalPlayer()
     {
-        // البحث عن Joystick
-        joystick = FindObjectOfType<FixedJoystick>();
-        isUsingJoystick = joystick != null;
+        // البحث عن Joystick (إذا كان موجوداً)
+        GameObject joystickObj = GameObject.Find("Joystick");
+        isUsingJoystick = joystickObj != null;
+        if (joystickObj != null)
+            joystickTransform = joystickObj.transform;
 
         // إضافة كاميرا
         Camera mainCamera = Camera.main;
@@ -111,12 +113,6 @@ public class PlayerController : MonoBehaviour
             moveDirection -= transform.right;
         if (Input.GetKey(KeyCode.D))
             moveDirection += transform.right;
-
-        // إدخال Joystick (الموبايل)
-        if (isUsingJoystick && joystick != null)
-        {
-            moveDirection = new Vector3(joystick.Horizontal, 0, joystick.Vertical);
-        }
 
         // تطبيع الاتجاه
         if (moveDirection.magnitude > 0)
