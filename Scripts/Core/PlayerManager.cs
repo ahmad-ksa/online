@@ -1,30 +1,23 @@
 using UnityEngine;
 using System;
-using System.Collections.Generic;
+using System.Threading.Tasks;
 
 /// <summary>
-/// مدير اللاعب - يتعامل مع بيانات اللاعب والملف الشخصي
+/// نظام إدارة بيانات اللاعب المحسّن
 /// </summary>
-public class PlayerManager : MonoBehaviour
+public class PlayerManager : MonoBehaviour, IPlayerManager
 {
     private static PlayerManager instance;
 
-    // Player Data
-    private PlayerProfile currentPlayerProfile;
-    private PlayerStats currentPlayerStats;
-    private PlayerSettings playerSettings;
+    private PlayerProfile currentProfile;
+    private PlayerStats currentStats;
+    private bool isAuthenticated = false;
 
     // Events
-    public static event Action<PlayerProfile> OnPlayerProfileLoaded;
-    public static event Action<PlayerStats> OnPlayerStatsUpdated;
-    public static event Action<string> OnPlayerDataSaved;
+    public event Action<PlayerProfile> OnProfileUpdated;
+    public event Action<PlayerStats> OnStatsUpdated;
 
-    // Storage
-    private const string PLAYER_PROFILE_KEY = "PlayerProfile";
-    private const string PLAYER_STATS_KEY = "PlayerStats";
-    private const string PLAYER_SETTINGS_KEY = "PlayerSettings";
-
-    private bool isInitialized = false;
+    private GameConfig config;
 
     private void Awake()
     {
@@ -36,334 +29,199 @@ public class PlayerManager : MonoBehaviour
 
         instance = this;
         DontDestroyOnLoad(gameObject);
+
+        config = GameConfig.Instance;
+        Logger.Log("PlayerManager initialized", "PlayerManager");
     }
 
     /// <summary>
-    /// تهيئة PlayerManager
+    /// تحميل بيانات اللاعب
     /// </summary>
-    public static void Initialize()
-    {
-        if (instance != null)
-        {
-            Debug.Log("PlayerManager already initialized");
-            return;
-        }
-
-        GameObject playerObject = new GameObject("PlayerManager");
-        instance = playerObject.AddComponent<PlayerManager>();
-        DontDestroyOnLoad(playerObject);
-
-        instance.InitializeLocal();
-        Debug.Log("PlayerManager Initialized");
-    }
-
-    private void InitializeLocal()
-    {
-        if (isInitialized)
-            return;
-
-        // تحميل البيانات المحلية
-        LoadPlayerDataLocal();
-
-        // إنشاء ملف شخصي جديد إذا لم يكن موجوداً
-        if (currentPlayerProfile == null)
-        {
-            currentPlayerProfile = new PlayerProfile();
-            Debug.Log("New player profile created");
-        }
-
-        if (currentPlayerStats == null)
-        {
-            currentPlayerStats = new PlayerStats();
-            Debug.Log("New player stats created");
-        }
-
-        if (playerSettings == null)
-        {
-            playerSettings = new PlayerSettings();
-            Debug.Log("New player settings created");
-        }
-
-        isInitialized = true;
-    }
-
-    /// <summary>
-    /// تحميل بيانات اللاعب المحلية
-    /// </summary>
-    private void LoadPlayerDataLocal()
+    public async Task<bool> LoadPlayerData()
     {
         try
         {
-            // تحميل الملف الشخصي
-            string profileJson = PlayerPrefs.GetString(PLAYER_PROFILE_KEY, "");
-            if (!string.IsNullOrEmpty(profileJson))
-            {
-                currentPlayerProfile = JsonUtility.FromJson<PlayerProfile>(profileJson);
-            }
+            Logger.Log("Loading player data...", "PlayerManager");
 
-            // تحميل الإحصائيات
-            string statsJson = PlayerPrefs.GetString(PLAYER_STATS_KEY, "");
-            if (!string.IsNullOrEmpty(statsJson))
-            {
-                currentPlayerStats = JsonUtility.FromJson<PlayerStats>(statsJson);
-            }
+            // محاكاة تحميل البيانات
+            await Task.Delay(500);
 
-            // تحميل الإعدادات
-            string settingsJson = PlayerPrefs.GetString(PLAYER_SETTINGS_KEY, "");
-            if (!string.IsNullOrEmpty(settingsJson))
+            currentProfile = new PlayerProfile
             {
-                playerSettings = JsonUtility.FromJson<PlayerSettings>(settingsJson);
-            }
+                playerId = "player_123",
+                username = "PlayerName",
+                email = "player@example.com",
+                level = 1,
+                xp = 0,
+                coins = 1000,
+                gems = 50,
+                createdAt = DateTime.Now,
+                lastLogin = DateTime.Now,
+                displayName = "Player",
+                avatar = ""
+            };
 
-            Debug.Log("Player data loaded from local storage");
+            currentStats = new PlayerStats
+            {
+                gamesPlayed = 0,
+                gamesWon = 0,
+                totalKills = 0,
+                totalDeaths = 0,
+                winRate = 0f,
+                playtime = 0,
+                lastUpdated = DateTime.Now
+            };
+
+            isAuthenticated = true;
+            OnProfileUpdated?.Invoke(currentProfile);
+            OnStatsUpdated?.Invoke(currentStats);
+
+            Logger.Log("Player data loaded successfully!", "PlayerManager");
+            return true;
         }
         catch (Exception ex)
         {
-            Debug.LogError($"Failed to load player data: {ex.Message}");
+            Logger.LogError($"Failed to load player data: {ex.Message}", "PlayerManager");
+            return false;
         }
     }
 
     /// <summary>
-    /// حفظ بيانات اللاعب محلياً
+    /// حفظ بيانات اللاعب
     /// </summary>
-    public void SavePlayerDataLocal()
+    public async Task<bool> SavePlayerData()
     {
         try
         {
-            string profileJson = JsonUtility.ToJson(currentPlayerProfile);
-            PlayerPrefs.SetString(PLAYER_PROFILE_KEY, profileJson);
+            if (currentProfile == null)
+            {
+                Logger.LogError("No player data to save!", "PlayerManager");
+                return false;
+            }
 
-            string statsJson = JsonUtility.ToJson(currentPlayerStats);
-            PlayerPrefs.SetString(PLAYER_STATS_KEY, statsJson);
+            Logger.Log("Saving player data...", "PlayerManager");
 
-            string settingsJson = JsonUtility.ToJson(playerSettings);
-            PlayerPrefs.SetString(PLAYER_SETTINGS_KEY, settingsJson);
+            // محاكاة حفظ البيانات
+            await Task.Delay(500);
 
-            PlayerPrefs.Save();
-
-            Debug.Log("Player data saved to local storage");
-            OnPlayerDataSaved?.Invoke("LOCAL_SAVE");
+            // TODO: احفظ البيانات في قاعدة البيانات السحابية
+            Logger.Log("Player data saved successfully!", "PlayerManager");
+            return true;
         }
         catch (Exception ex)
         {
-            Debug.LogError($"Failed to save player data: {ex.Message}");
+            Logger.LogError($"Failed to save player data: {ex.Message}", "PlayerManager");
+            return false;
         }
     }
 
     /// <summary>
-    /// تحديث الملف الشخصي
+    /// إضافة عملة للاعب
     /// </summary>
-    public void UpdatePlayerProfile(PlayerProfile newProfile)
+    public async Task<bool> AddCurrency(int amount, string currencyType)
     {
-        currentPlayerProfile = newProfile;
-        OnPlayerProfileLoaded?.Invoke(currentPlayerProfile);
-        SavePlayerDataLocal();
-
-        Debug.Log($"Player profile updated: {currentPlayerProfile.playerName}");
-    }
-
-    /// <summary>
-    /// تحديث الإحصائيات
-    /// </summary>
-    public void UpdatePlayerStats(PlayerStats newStats)
-    {
-        currentPlayerStats = newStats;
-        OnPlayerStatsUpdated?.Invoke(currentPlayerStats);
-        SavePlayerDataLocal();
-
-        Debug.Log("Player stats updated");
-    }
-
-    /// <summary>
-    /// إضافة XP
-    /// </summary>
-    public void AddXP(int amount)
-    {
-        currentPlayerStats.totalXP += amount;
-        
-        // تحديث المستوى
-        int newLevel = (currentPlayerStats.totalXP / 1000) + 1;
-        if (newLevel > currentPlayerStats.currentLevel)
+        try
         {
-            currentPlayerStats.currentLevel = newLevel;
-            Debug.Log($"Level up! New level: {newLevel}");
-        }
-
-        OnPlayerStatsUpdated?.Invoke(currentPlayerStats);
-        SavePlayerDataLocal();
-    }
-
-    /// <summary>
-    /// إضافة عملات
-    /// </summary>
-    public void AddCurrency(int amount, CurrencyType currencyType)
-    {
-        if (currencyType == CurrencyType.Coins)
-        {
-            currentPlayerStats.coins += amount;
-        }
-        else if (currencyType == CurrencyType.Gems)
-        {
-            currentPlayerStats.gems += amount;
-        }
-
-        SavePlayerDataLocal();
-    }
-
-    /// <summary>
-    /// استنزاف عملات
-    /// </summary>
-    public bool SpendCurrency(int amount, CurrencyType currencyType)
-    {
-        if (currencyType == CurrencyType.Coins)
-        {
-            if (currentPlayerStats.coins >= amount)
+            if (currentProfile == null)
             {
-                currentPlayerStats.coins -= amount;
-                SavePlayerDataLocal();
-                return true;
+                Logger.LogError("No player profile!", "PlayerManager");
+                return false;
             }
-        }
-        else if (currencyType == CurrencyType.Gems)
-        {
-            if (currentPlayerStats.gems >= amount)
+
+            if (amount <= 0)
             {
-                currentPlayerStats.gems -= amount;
-                SavePlayerDataLocal();
-                return true;
+                Logger.LogWarning("Invalid currency amount!", "PlayerManager");
+                return false;
             }
+
+            if (currencyType == "coins")
+            {
+                currentProfile.coins += amount;
+            }
+            else if (currencyType == "gems")
+            {
+                currentProfile.gems += amount;
+            }
+            else
+            {
+                Logger.LogError($"Unknown currency type: {currencyType}", "PlayerManager");
+                return false;
+            }
+
+            Logger.Log($"Added {amount} {currencyType} to player", "PlayerManager");
+            OnProfileUpdated?.Invoke(currentProfile);
+
+            await SavePlayerData();
+            return true;
         }
+        catch (Exception ex)
+        {
+            Logger.LogError($"Failed to add currency: {ex.Message}", "PlayerManager");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// إضافة XP للاعب
+    /// </summary>
+    public async Task<bool> AddXP(int amount)
+    {
+        try
+        {
+            if (currentProfile == null)
+            {
+                Logger.LogError("No player profile!", "PlayerManager");
+                return false;
+            }
+
+            if (amount <= 0)
+            {
+                Logger.LogWarning("Invalid XP amount!", "PlayerManager");
+                return false;
+            }
+
+            currentProfile.xp += amount;
+
+            // حساب Level بناءً على XP
+            int newLevel = (int)(currentProfile.xp / 1000) + 1;
+            if (newLevel != currentProfile.level)
+            {
+                currentProfile.level = newLevel;
+                Logger.Log($"Player leveled up to {currentProfile.level}!", "PlayerManager");
+            }
+
+            Logger.Log($"Added {amount} XP to player", "PlayerManager");
+            OnProfileUpdated?.Invoke(currentProfile);
+
+            await SavePlayerData();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError($"Failed to add XP: {ex.Message}", "PlayerManager");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// التحقق من توفر المال
+    /// </summary>
+    public bool HasCurrency(int amount, string currencyType)
+    {
+        if (currentProfile == null)
+            return false;
+
+        if (currencyType == "coins")
+            return currentProfile.coins >= amount;
+        else if (currencyType == "gems")
+            return currentProfile.gems >= amount;
 
         return false;
     }
 
-    /// <summary>
-    /// فتح إنجاز
-    /// </summary>
-    public void UnlockAchievement(string achievementId)
-    {
-        if (!currentPlayerStats.UnlockedAchievements.Contains(achievementId))
-        {
-            currentPlayerStats.UnlockedAchievements.Add(achievementId);
-            SavePlayerDataLocal();
-
-            Debug.Log($"Achievement unlocked: {achievementId}");
-        }
-    }
-
-    /// <summary>
-    /// فتح شخصية
-    /// </summary>
-    public void UnlockCharacter(string characterId)
-    {
-        if (!currentPlayerStats.UnlockedCharacters.Contains(characterId))
-        {
-            currentPlayerStats.UnlockedCharacters.Add(characterId);
-            SavePlayerDataLocal();
-
-            Debug.Log($"Character unlocked: {characterId}");
-        }
-    }
-
-    /// <summary>
-    /// تعيين الشخصية المختارة
-    /// </summary>
-    public void SetSelectedCharacter(string characterId)
-    {
-        if (currentPlayerStats.UnlockedCharacters.Contains(characterId))
-        {
-            currentPlayerStats.selectedCharacterId = characterId;
-            SavePlayerDataLocal();
-
-            Debug.Log($"Character selected: {characterId}");
-        }
-    }
-
-    // Getters
+    // Properties
+    public PlayerProfile CurrentProfile => currentProfile;
+    public PlayerStats CurrentStats => currentStats;
+    public bool IsAuthenticated => isAuthenticated;
     public static PlayerManager Instance => instance;
-    public PlayerProfile CurrentProfile => currentPlayerProfile;
-    public PlayerStats CurrentStats => currentPlayerStats;
-    public PlayerSettings Settings => playerSettings;
-    public bool IsInitialized => isInitialized;
-}
-
-// ==================== Data Classes ====================
-
-[System.Serializable]
-public class PlayerProfile
-{
-    public string playerId = System.Guid.NewGuid().ToString();
-    public string playerName = "Player";
-    public string email = "";
-    public string profilePictureUrl = "";
-    public string bio = "";
-    public long createdAt = System.DateTime.Now.Ticks;
-    public long lastLoginAt = System.DateTime.Now.Ticks;
-    public bool isVerified = false;
-}
-
-[System.Serializable]
-public class PlayerStats
-{
-    public int currentLevel = 1;
-    public int totalXP = 0;
-    public int coins = 0;
-    public int gems = 0;
-
-    public int totalMatches = 0;
-    public int totalWins = 0;
-    public int totalLosses = 0;
-
-    public float winRatio => totalMatches > 0 ? (float)totalWins / totalMatches : 0f;
-
-    public string selectedCharacterId = "default";
-    
-    [SerializeField]
-    private List<string> unlockedCharacters = new List<string> { "default" };
-    
-    [SerializeField]
-    private List<string> unlockedAchievements = new List<string>();
-
-    public List<string> UnlockedCharacters => unlockedCharacters;
-    public List<string> UnlockedAchievements => unlockedAchievements;
-}
-
-[System.Serializable]
-public class PlayerSettings
-{
-    [SerializeField]
-    public float masterVolume = 0.8f;
-    [SerializeField]
-    public float musicVolume = 0.6f;
-    [SerializeField]
-    public float sfxVolume = 0.8f;
-    [SerializeField]
-    public float voiceVolume = 0.8f;
-
-    [SerializeField]
-    public int graphicsQuality = 2; // 0: Low, 1: Medium, 2: High
-    [SerializeField]
-    public float brightness = 1f;
-    [SerializeField]
-    public int fps = 60;
-
-    [SerializeField]
-    public string language = "en";
-    [SerializeField]
-    public bool subtitles = true;
-    [SerializeField]
-    public bool hapticFeedback = true;
-
-    [SerializeField]
-    public bool allowFriendRequests = true;
-    [SerializeField]
-    public bool allowMessages = true;
-    [SerializeField]
-    public bool profilePublic = true;
-}
-
-public enum CurrencyType
-{
-    Coins,
-    Gems
 }
