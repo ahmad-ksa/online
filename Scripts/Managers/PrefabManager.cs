@@ -1,17 +1,17 @@
 using UnityEngine;
+using System.Collections.Generic;
 
 /// <summary>
-/// Prefab Manager - إنشاء واستخدام Prefabs بسهولة
+/// مدير النماذج (Prefabs) - تحميل وإنشاء الكائنات
 /// </summary>
 public class PrefabManager : MonoBehaviour
 {
     private static PrefabManager instance;
 
-    [SerializeField] private GameObject playerPrefab;
-    [SerializeField] private GameObject chatMessagePrefab;
-    [SerializeField] private GameObject friendItemPrefab;
-    [SerializeField] private GameObject notificationPrefab;
-    [SerializeField] private GameObject inviteNotificationPrefab;
+    [SerializeField]
+    private Dictionary<string, GameObject> prefabCache = new Dictionary<string, GameObject>();
+
+    private const string PREFABS_PATH = "Prefabs/";
 
     private void Awake()
     {
@@ -24,130 +24,123 @@ public class PrefabManager : MonoBehaviour
         instance = this;
         DontDestroyOnLoad(gameObject);
 
-        LoadPrefabs();
         Logger.Log("PrefabManager initialized", "PrefabManager");
     }
 
     /// <summary>
-    /// تحميل جميع الـ Prefabs من Resources
+    /// تحميل Prefab من Resources
     /// </summary>
-    private void LoadPrefabs()
+    public GameObject LoadPrefab(string prefabName)
     {
-        playerPrefab = Resources.Load<GameObject>("Prefabs/Player");
-        chatMessagePrefab = Resources.Load<GameObject>("Prefabs/ChatMessage");
-        friendItemPrefab = Resources.Load<GameObject>("Prefabs/FriendItem");
-        notificationPrefab = Resources.Load<GameObject>("Prefabs/Notification");
-        inviteNotificationPrefab = Resources.Load<GameObject>("Prefabs/InviteNotification");
+        if (prefabCache.ContainsKey(prefabName))
+        {
+            return prefabCache[prefabName];
+        }
 
-        if (playerPrefab == null)
-            Logger.LogWarning("Player prefab not found in Resources/Prefabs/", "PrefabManager");
-        if (chatMessagePrefab == null)
-            Logger.LogWarning("ChatMessage prefab not found", "PrefabManager");
-        if (friendItemPrefab == null)
-            Logger.LogWarning("FriendItem prefab not found", "PrefabManager");
+        try
+        {
+            GameObject prefab = Resources.Load<GameObject>(PREFABS_PATH + prefabName);
+
+            if (prefab == null)
+            {
+                Logger.LogError($"Prefab not found: {prefabName}", "PrefabManager");
+                return null;
+            }
+
+            prefabCache[prefabName] = prefab;
+            Logger.LogDebug($"Prefab loaded: {prefabName}", "PrefabManager");
+            return prefab;
+        }
+        catch (System.Exception ex)
+        {
+            Logger.LogError($"Failed to load prefab {prefabName}: {ex.Message}", "PrefabManager");
+            return null;
+        }
     }
 
     /// <summary>
-    /// إنشاء لاعب
+    /// إنشاء كائن من Prefab
     /// </summary>
-    public GameObject CreatePlayer(Vector3 position, Quaternion rotation)
+    public GameObject InstantiatePrefab(string prefabName, Vector3 position, Quaternion rotation)
     {
-        if (playerPrefab == null)
+        GameObject prefab = LoadPrefab(prefabName);
+
+        if (prefab == null)
+            return null;
+
+        try
         {
-            Logger.LogError("Player prefab not loaded!", "PrefabManager");
+            GameObject instance = Instantiate(prefab, position, rotation);
+            instance.name = prefabName;
+            Logger.LogDebug($"Prefab instantiated: {prefabName}", "PrefabManager");
+            return instance;
+        }
+        catch (System.Exception ex)
+        {
+            Logger.LogError($"Failed to instantiate prefab {prefabName}: {ex.Message}", "PrefabManager");
             return null;
         }
-
-        return Instantiate(playerPrefab, position, rotation);
     }
 
     /// <summary>
-    /// إنشاء رسالة دردشة
+    /// إنشاء كائن بدون موضع محدد
     /// </summary>
-    public GameObject CreateChatMessage(string senderName, string content, Transform parent)
+    public GameObject InstantiatePrefab(string prefabName)
     {
-        if (chatMessagePrefab == null)
-        {
-            Logger.LogError("ChatMessage prefab not loaded!", "PrefabManager");
-            return null;
-        }
-
-        GameObject msg = Instantiate(chatMessagePrefab, parent);
-        
-        // تعيين البيانات
-        var chatMsgUI = msg.GetComponent<ChatMessageUI>();
-        if (chatMsgUI != null)
-        {
-            chatMsgUI.SetMessage(senderName, content);
-        }
-
-        return msg;
+        return InstantiatePrefab(prefabName, Vector3.zero, Quaternion.identity);
     }
 
     /// <summary>
-    /// إنشاء عنصر صديق
+    /// إنشاء كائن مع parent
     /// </summary>
-    public GameObject CreateFriendItem(string friendName, bool isOnline, Transform parent)
+    public GameObject InstantiatePrefab(string prefabName, Transform parent)
     {
-        if (friendItemPrefab == null)
+        GameObject prefab = LoadPrefab(prefabName);
+
+        if (prefab == null)
+            return null;
+
+        try
         {
-            Logger.LogError("FriendItem prefab not loaded!", "PrefabManager");
+            GameObject instance = Instantiate(prefab, parent);
+            instance.name = prefabName;
+            Logger.LogDebug($"Prefab instantiated with parent: {prefabName}", "PrefabManager");
+            return instance;
+        }
+        catch (System.Exception ex)
+        {
+            Logger.LogError($"Failed to instantiate prefab with parent {prefabName}: {ex.Message}", "PrefabManager");
             return null;
         }
-
-        GameObject item = Instantiate(friendItemPrefab, parent);
-        
-        var friendUI = item.GetComponent<FriendItemUI>();
-        if (friendUI != null)
-        {
-            friendUI.SetFriend(friendName, isOnline);
-        }
-
-        return item;
     }
 
     /// <summary>
-    /// إنشاء إشعار عام
+    /// حذف كائن
     /// </summary>
-    public GameObject CreateNotification(string message, Transform parent)
+    public void DestroyGameObject(GameObject obj)
     {
-        if (notificationPrefab == null)
+        if (obj != null)
         {
-            Logger.LogError("Notification prefab not loaded!", "PrefabManager");
-            return null;
+            Destroy(obj);
+            Logger.LogDebug($"GameObject destroyed: {obj.name}", "PrefabManager");
         }
-
-        GameObject notif = Instantiate(notificationPrefab, parent);
-        
-        var notifUI = notif.GetComponent<NotificationUI>();
-        if (notifUI != null)
-        {
-            notifUI.SetMessage(message);
-        }
-
-        return notif;
     }
 
     /// <summary>
-    /// إنشاء إشعار دعوة
+    /// تفريغ الـ Cache
     /// </summary>
-    public GameObject CreateInviteNotification(string fromPlayerName, Transform parent)
+    public void ClearCache()
     {
-        if (inviteNotificationPrefab == null)
-        {
-            Logger.LogError("InviteNotification prefab not loaded!", "PrefabManager");
-            return null;
-        }
+        prefabCache.Clear();
+        Logger.Log("Prefab cache cleared", "PrefabManager");
+    }
 
-        GameObject invite = Instantiate(inviteNotificationPrefab, parent);
-        
-        var inviteUI = invite.GetComponent<InviteNotificationUI>();
-        if (inviteUI != null)
-        {
-            inviteUI.SetInvite(fromPlayerName);
-        }
-
-        return invite;
+    /// <summary>
+    /// الحصول على عدد الـ Prefabs المخزنة
+    /// </summary>
+    public int GetCacheCount()
+    {
+        return prefabCache.Count;
     }
 
     public static PrefabManager Instance => instance;
