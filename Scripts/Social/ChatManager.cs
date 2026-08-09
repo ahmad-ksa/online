@@ -1,37 +1,34 @@
 using UnityEngine;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading.Tasks;
 
 /// <summary>
-/// مدير الدردشة - يتعامل مع الرسائل الخاصة والمجموعات
+/// نظام إدارة الدردشة (عام وخاص)
 /// </summary>
 public class ChatManager : MonoBehaviour
 {
     private static ChatManager instance;
 
-    // Chat Conversations
-    private Dictionary<string, ChatConversation> conversations = new Dictionary<string, ChatConversation>();
-    private List<ChatMessage> globalMessages = new List<ChatMessage>();
-    private List<ChatMessage> lobbyMessages = new List<ChatMessage>();
+    [System.Serializable]
+    public class ChatMessage
+    {
+        public string messageId;
+        public string senderId;
+        public string senderName;
+        public string content;
+        public DateTime timestamp;
+        public string channelId; // "global" أو friendId
+        public bool isLocal; // رسالتي أم رسالة شخص آخر
+    }
 
-    // Current Conversation
-    private string currentConversationId = "";
+    private Dictionary<string, List<ChatMessage>> chatChannels = new Dictionary<string, List<ChatMessage>>();
+    private NetworkManager networkManager;
+    private PlayerManager playerManager;
 
     // Events
-    public static event Action<ChatMessage> OnMessageReceived;
-    public static event Action<ChatMessage> OnMessageSent;
-    public static event Action<string> OnConversationCreated;
-    public static event Action<string, List<ChatMessage>> OnConversationLoaded;
-    public static event Action<string> OnTypingStatusChanged;
-
-    // Storage Keys
-    private const string CONVERSATIONS_KEY = "ChatConversations";
-    private const string GLOBAL_MESSAGES_KEY = "GlobalMessages";
-    private const string LOBBY_MESSAGES_KEY = "LobbyMessages";
-
-    private bool isInitialized = false;
+    public event Action<ChatMessage> OnMessageReceived;
+    public event Action<ChatMessage> OnMessageSent;
 
     private void Awake()
     {
@@ -43,531 +40,173 @@ public class ChatManager : MonoBehaviour
 
         instance = this;
         DontDestroyOnLoad(gameObject);
-    }
 
-    private void Start()
-    {
-        Initialize();
-    }
+        networkManager = NetworkManager.Instance;
+        playerManager = PlayerManager.Instance;
 
-    /// <summary>
-    /// تهيئة مدير الدردشة
-    /// </summary>
-    public void Initialize()
-    {
-        if (isInitialized)
-            return;
+        // إنشاء قنوات الدردشة الأساسية
+        chatChannels["global"] = new List<ChatMessage>();
 
-        LoadConversationsLocal();
-        LoadGlobalMessagesLocal();
-        LoadLobbyMessagesLocal();
-
-        isInitialized = true;
-        Debug.Log("ChatManager Initialized");
+        Logger.Log("ChatManager initialized", "ChatManager");
     }
 
     /// <summary>
-    /// إنشاء محادثة جديدة (رسالة خاصة)
+    /// إرسال رسالة في الدردشة العامة
     /// </summary>
-    public async Task<string> CreatePrivateConversation(string recipientId, string recipientUsername)
+    public async Task<bool> SendGlobalMessage(string content)
+    {
+        return await SendMessage("global", content);
+    }
+
+    /// <summary>
+    /// إرسال رسالة خاصة لصديق
+    /// </summary>
+    public async Task<bool> SendPrivateMessage(string friendId, string friendName, string content)
+    {
+        // إنشاء قناة خاصة إذا لم تكن موجودة
+        if (!chatChannels.ContainsKey(friendId))
+        {
+            chatChannels[friendId] = new List<ChatMessage>();
+        }
+
+        return await SendMessage(friendId, content);
+    }
+
+    /// <summary>
+    /// إرسال الرسالة الفعلية
+    /// </summary>
+    private async Task<bool> SendMessage(string channelId, string content)
     {
         try
         {
-            Debug.Log($"Creating private conversation with {recipientUsername}");
-
-            // تحقق من وجود محادثة سابقة
-            string existingConversationId = FindConversation(recipientId);
-            if (!string.IsNullOrEmpty(existingConversationId))
+            if (string.IsNullOrEmpty(content))
             {
-                Debug.Log("Conversation already exists");
-                return existingConversationId;
+                Logger.LogWarning("Message content is empty!", "ChatManager");
+                return false;
             }
 
-            await Task.Delay(300);
-
-            // إنشاء محادثة جديدة
-            string conversationId = System.Guid.NewGuid().ToString();
-            var conversation = new ChatConversation
+            if (content.Length > 255)
             {
-                ConversationId = conversationId,
-                ConversationType = ChatConversationType.Private,
-                ParticipantIds = new List<string> 
-                { 
-                    PlayerManager.Instance.CurrentProfile.playerId, 
-                    recipientId 
-                },
-                CreatedAt = DateTime.Now,
-                LastMessageAt = DateTime.Now
-            };
+                Logger.LogWarning("Message too long! Max 255 characters", "ChatManager");
+                return false;
+            }
 
-            conversations[conversationId] = conversation;
-            SaveConversationsLocal();
+            var playerProfile = playerManager.CurrentProfile;
+            if (playerProfile == null)
+            {
+                Logger.LogError("Player profile not loaded!", "ChatManager");
+                return false;
+            }
 
-            OnConversationCreated?.Invoke(conversationId);
-
-            Debug.Log($"Private conversation created: {conversationId}");
-            return conversationId;
-        }
-        catch (Exception ex)
-        {
-            Debug.LogError($"Failed to create conversation: {ex.Message}");
-            return "";
-        }
-    }
-
-    /// <summary>
-    /// إرسال رسالة
-    /// </summary>
-    public async Task<bool> SendMessage(string conversationId, string messageText)
-    {
-        if (string.IsNullOrEmpty(messageText))
-        {
-            Debug.LogWarning("Message cannot be empty");
-            return false;
-        }
-
-        try
-        {
-            Debug.Log($"Sending message to {conversationId}");
-
-            await Task.Delay(200);
-
-            // إنشاء الرسالة
             var message = new ChatMessage
             {
-                MessageId = System.Guid.NewGuid().ToString(),
-                ConversationId = conversationId,
-                SenderId = PlayerManager.Instance.CurrentProfile.playerId,
-                SenderUsername = PlayerManager.Instance.CurrentProfile.playerName,
-                MessageText = messageText,
-                SentAt = DateTime.Now,
-                IsRead = true
+                messageId = System.Guid.NewGuid().ToString(),
+                senderId = playerProfile.playerId,
+                senderName = playerProfile.username,
+                content = content,
+                timestamp = DateTime.Now,
+                channelId = channelId,
+                isLocal = true
             };
 
-            // إضافة للمحادثة
-            if (conversations.ContainsKey(conversationId))
+            // إضافة الرسالة محلياً
+            if (!chatChannels.ContainsKey(channelId))
             {
-                conversations[conversationId].Messages.Add(message);
-                conversations[conversationId].LastMessageAt = DateTime.Now;
-                SaveConversationsLocal();
+                chatChannels[channelId] = new List<ChatMessage>();
             }
 
-            OnMessageSent?.Invoke(message);
+            chatChannels[channelId].Add(message);
 
-            Debug.Log("Message sent successfully");
-            return true;
+            // إرسال للسيرفر
+            var msgData = new NetworkMessage
+            {
+                messageType = "CHAT_MESSAGE",
+                data = new Dictionary<string, object>
+                {
+                    { "messageId", message.messageId },
+                    { "senderId", message.senderId },
+                    { "senderName", message.senderName },
+                    { "content", message.content },
+                    { "channelId", message.channelId }
+                }
+            };
+
+            bool sent = await networkManager.SendMessage(msgData);
+
+            if (sent)
+            {
+                OnMessageSent?.Invoke(message);
+                Logger.LogDebug($"Message sent to {channelId}", "ChatManager");
+            }
+
+            return sent;
         }
         catch (Exception ex)
         {
-            Debug.LogError($"Failed to send message: {ex.Message}");
+            Logger.LogError($"Failed to send message: {ex.Message}", "ChatManager");
             return false;
         }
     }
 
     /// <summary>
-    /// تحميل محادثة
+    /// استقبال رسالة جديدة
     /// </summary>
-    public async Task<List<ChatMessage>> LoadConversation(string conversationId)
+    public void ReceiveMessage(string messageId, string senderId, string senderName, string content, string channelId)
     {
         try
         {
-            Debug.Log($"Loading conversation: {conversationId}");
-
-            currentConversationId = conversationId;
-            await Task.Delay(300);
-
-            if (conversations.ContainsKey(conversationId))
+            if (!chatChannels.ContainsKey(channelId))
             {
-                var messages = conversations[conversationId].Messages.OrderBy(m => m.SentAt).ToList();
-                OnConversationLoaded?.Invoke(conversationId, messages);
-
-                Debug.Log($"Conversation loaded ({messages.Count} messages)");
-                return messages;
+                chatChannels[channelId] = new List<ChatMessage>();
             }
 
+            var message = new ChatMessage
+            {
+                messageId = messageId,
+                senderId = senderId,
+                senderName = senderName,
+                content = content,
+                timestamp = DateTime.Now,
+                channelId = channelId,
+                isLocal = false
+            };
+
+            chatChannels[channelId].Add(message);
+            OnMessageReceived?.Invoke(message);
+
+            Logger.Log($"Message received from {senderName} in {channelId}", "ChatManager");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError($"Failed to receive message: {ex.Message}", "ChatManager");
+        }
+    }
+
+    /// <summary>
+    /// الحصول على رسائل قناة معينة
+    /// </summary>
+    public List<ChatMessage> GetChannelMessages(string channelId, int limit = 50)
+    {
+        if (!chatChannels.ContainsKey(channelId))
             return new List<ChatMessage>();
-        }
-        catch (Exception ex)
-        {
-            Debug.LogError($"Failed to load conversation: {ex.Message}");
-            return new List<ChatMessage>();
-        }
+
+        var messages = chatChannels[channelId];
+        int startIndex = Mathf.Max(0, messages.Count - limit);
+        return messages.GetRange(startIndex, messages.Count - startIndex);
     }
 
     /// <summary>
-    /// إرسال رسالة عامة (Global Chat)
+    /// حذف قنوات الدردشة (حذف صديق)
     /// </summary>
-    public async Task<bool> SendGlobalMessage(string messageText)
+    public void DeleteChannel(string channelId)
     {
-        if (string.IsNullOrEmpty(messageText))
+        if (chatChannels.ContainsKey(channelId))
         {
-            Debug.LogWarning("Message cannot be empty");
-            return false;
-        }
-
-        try
-        {
-            Debug.Log("Sending global message");
-
-            await Task.Delay(200);
-
-            var message = new ChatMessage
-            {
-                MessageId = System.Guid.NewGuid().ToString(),
-                ConversationId = "GLOBAL",
-                SenderId = PlayerManager.Instance.CurrentProfile.playerId,
-                SenderUsername = PlayerManager.Instance.CurrentProfile.playerName,
-                MessageText = messageText,
-                SentAt = DateTime.Now,
-                IsRead = true
-            };
-
-            globalMessages.Add(message);
-            SaveGlobalMessagesLocal();
-
-            OnMessageSent?.Invoke(message);
-
-            Debug.Log("Global message sent");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Debug.LogError($"Failed to send global message: {ex.Message}");
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// إرسال رسالة لوبي
-    /// </summary>
-    public async Task<bool> SendLobbyMessage(string messageText)
-    {
-        if (string.IsNullOrEmpty(messageText))
-        {
-            Debug.LogWarning("Message cannot be empty");
-            return false;
-        }
-
-        try
-        {
-            Debug.Log("Sending lobby message");
-
-            await Task.Delay(200);
-
-            var message = new ChatMessage
-            {
-                MessageId = System.Guid.NewGuid().ToString(),
-                ConversationId = "LOBBY",
-                SenderId = PlayerManager.Instance.CurrentProfile.playerId,
-                SenderUsername = PlayerManager.Instance.CurrentProfile.playerName,
-                MessageText = messageText,
-                SentAt = DateTime.Now,
-                IsRead = true
-            };
-
-            lobbyMessages.Add(message);
-            SaveLobbyMessagesLocal();
-
-            OnMessageSent?.Invoke(message);
-
-            Debug.Log("Lobby message sent");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Debug.LogError($"Failed to send lobby message: {ex.Message}");
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// البحث عن محادثة
-    /// </summary>
-    private string FindConversation(string recipientId)
-    {
-        foreach (var kvp in conversations)
-        {
-            var conversation = kvp.Value;
-            if (conversation.ConversationType == ChatConversationType.Private &&
-                conversation.ParticipantIds.Contains(recipientId))
-            {
-                return conversation.ConversationId;
-            }
-        }
-
-        return "";
-    }
-
-    /// <summary>
-    /// الحصول على قائمة المحادثات
-    /// </summary>
-    public List<ChatConversation> GetAllConversations()
-    {
-        return conversations.Values.OrderByDescending(c => c.LastMessageAt).ToList();
-    }
-
-    /// <summary>
-    /// الحصول على آخر رسالة في محادثة
-    /// </summary>
-    public ChatMessage GetLastMessage(string conversationId)
-    {
-        if (conversations.ContainsKey(conversationId))
-        {
-            var messages = conversations[conversationId].Messages;
-            return messages.Count > 0 ? messages[messages.Count - 1] : null;
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// حذف رسالة
-    /// </summary>
-    public async Task<bool> DeleteMessage(string conversationId, string messageId)
-    {
-        try
-        {
-            Debug.Log($"Deleting message: {messageId}");
-
-            await Task.Delay(200);
-
-            if (conversations.ContainsKey(conversationId))
-            {
-                var message = conversations[conversationId].Messages
-                    .FirstOrDefault(m => m.MessageId == messageId);
-
-                if (message != null)
-                {
-                    conversations[conversationId].Messages.Remove(message);
-                    SaveConversationsLocal();
-
-                    Debug.Log("Message deleted");
-                    return true;
-                }
-            }
-
-            return false;
-        }
-        catch (Exception ex)
-        {
-            Debug.LogError($"Failed to delete message: {ex.Message}");
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// حفظ المحادثات محلياً
-    /// </summary>
-    private void SaveConversationsLocal()
-    {
-        try
-        {
-            // حفظ فقط آخر 50 رسالة لكل محادثة للحفاظ على الأداء
-            var limitedConversations = new Dictionary<string, ChatConversation>(conversations);
-            foreach (var kvp in limitedConversations)
-            {
-                if (kvp.Value.Messages.Count > 50)
-                {
-                    kvp.Value.Messages = kvp.Value.Messages
-                        .Skip(kvp.Value.Messages.Count - 50)
-                        .ToList();
-                }
-            }
-
-            string json = JsonUtility.ToJson(new ConversationsWrapper 
-            { 
-                conversations = limitedConversations.Values.ToList() 
-            });
-            PlayerPrefs.SetString(CONVERSATIONS_KEY, json);
-            PlayerPrefs.Save();
-
-            Debug.Log($"Conversations saved ({conversations.Count} conversations)");
-        }
-        catch (Exception ex)
-        {
-            Debug.LogError($"Failed to save conversations: {ex.Message}");
-        }
-    }
-
-    /// <summary>
-    /// تحميل المحادثات محلياً
-    /// </summary>
-    private void LoadConversationsLocal()
-    {
-        try
-        {
-            string json = PlayerPrefs.GetString(CONVERSATIONS_KEY, "");
-            if (!string.IsNullOrEmpty(json))
-            {
-                var wrapper = JsonUtility.FromJson<ConversationsWrapper>(json);
-                conversations.Clear();
-
-                foreach (var conv in wrapper.conversations)
-                {
-                    conversations[conv.ConversationId] = conv;
-                }
-
-                Debug.Log($"Conversations loaded ({conversations.Count} conversations)");
-            }
-        }
-        catch (Exception ex)
-        {
-            Debug.LogError($"Failed to load conversations: {ex.Message}");
-        }
-    }
-
-    /// <summary>
-    /// حفظ الرسائل العامة
-    /// </summary>
-    private void SaveGlobalMessagesLocal()
-    {
-        try
-        {
-            // احتفظ بـ آخر 100 رسالة
-            if (globalMessages.Count > 100)
-            {
-                globalMessages = globalMessages.Skip(globalMessages.Count - 100).ToList();
-            }
-
-            string json = JsonUtility.ToJson(new GlobalMessagesWrapper { messages = globalMessages });
-            PlayerPrefs.SetString(GLOBAL_MESSAGES_KEY, json);
-            PlayerPrefs.Save();
-        }
-        catch (Exception ex)
-        {
-            Debug.LogError($"Failed to save global messages: {ex.Message}");
-        }
-    }
-
-    /// <summary>
-    /// تحميل الرسائل العامة
-    /// </summary>
-    private void LoadGlobalMessagesLocal()
-    {
-        try
-        {
-            string json = PlayerPrefs.GetString(GLOBAL_MESSAGES_KEY, "");
-            if (!string.IsNullOrEmpty(json))
-            {
-                var wrapper = JsonUtility.FromJson<GlobalMessagesWrapper>(json);
-                globalMessages = wrapper.messages ?? new List<ChatMessage>();
-
-                Debug.Log($"Global messages loaded ({globalMessages.Count} messages)");
-            }
-        }
-        catch (Exception ex)
-        {
-            Debug.LogError($"Failed to load global messages: {ex.Message}");
-        }
-    }
-
-    /// <summary>
-    /// حفظ رسائل اللوبي
-    /// </summary>
-    private void SaveLobbyMessagesLocal()
-    {
-        try
-        {
-            // احتفظ بـ آخر 50 رسالة
-            if (lobbyMessages.Count > 50)
-            {
-                lobbyMessages = lobbyMessages.Skip(lobbyMessages.Count - 50).ToList();
-            }
-
-            string json = JsonUtility.ToJson(new LobbyMessagesWrapper { messages = lobbyMessages });
-            PlayerPrefs.SetString(LOBBY_MESSAGES_KEY, json);
-            PlayerPrefs.Save();
-        }
-        catch (Exception ex)
-        {
-            Debug.LogError($"Failed to save lobby messages: {ex.Message}");
-        }
-    }
-
-    /// <summary>
-    /// تحميل رسائل اللوبي
-    /// </summary>
-    private void LoadLobbyMessagesLocal()
-    {
-        try
-        {
-            string json = PlayerPrefs.GetString(LOBBY_MESSAGES_KEY, "");
-            if (!string.IsNullOrEmpty(json))
-            {
-                var wrapper = JsonUtility.FromJson<LobbyMessagesWrapper>(json);
-                lobbyMessages = wrapper.messages ?? new List<ChatMessage>();
-
-                Debug.Log($"Lobby messages loaded ({lobbyMessages.Count} messages)");
-            }
-        }
-        catch (Exception ex)
-        {
-            Debug.LogError($"Failed to load lobby messages: {ex.Message}");
+            chatChannels.Remove(channelId);
+            Logger.Log($"Chat channel deleted: {channelId}", "ChatManager");
         }
     }
 
     // Getters
     public static ChatManager Instance => instance;
-    public Dictionary<string, ChatConversation> Conversations => conversations;
-    public List<ChatMessage> GlobalMessages => globalMessages;
-    public List<ChatMessage> LobbyMessages => lobbyMessages;
-    public string CurrentConversationId => currentConversationId;
-}
-
-// ==================== Data Classes ====================
-
-[System.Serializable]
-public class ChatConversation
-{
-    public string ConversationId;
-    public ChatConversationType ConversationType;
-    public List<string> ParticipantIds = new List<string>();
-    public List<ChatMessage> Messages = new List<ChatMessage>();
-    public DateTime CreatedAt;
-    public DateTime LastMessageAt;
-    public string ConversationName = "";
-    public bool IsMuted = false;
-}
-
-[System.Serializable]
-public class ChatMessage
-{
-    public string MessageId;
-    public string ConversationId;
-    public string SenderId;
-    public string SenderUsername;
-    public string MessageText;
-    public DateTime SentAt;
-    public bool IsRead;
-    public string MessageType = "text"; // text, image, system
-    public List<string> Reactions = new List<string>(); // emoji reactions
-}
-
-public enum ChatConversationType
-{
-    Private,
-    Group,
-    Global,
-    Lobby,
-    System
-}
-
-// ==================== Wrapper Classes ====================
-
-[System.Serializable]
-public class ConversationsWrapper
-{
-    public List<ChatConversation> conversations = new List<ChatConversation>();
-}
-
-[System.Serializable]
-public class GlobalMessagesWrapper
-{
-    public List<ChatMessage> messages = new List<ChatMessage>();
-}
-
-[System.Serializable]
-public class LobbyMessagesWrapper
-{
-    public List<ChatMessage> messages = new List<ChatMessage>();
 }
